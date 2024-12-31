@@ -1,0 +1,11 @@
+POST http://localhost:8080/shopping-list
+Content-Type: application/json
+
+{
+  "name": "Milk"
+
+}
+
+GET http://localhost:8080/shopping-list
+
+DELETE http://localhost:8080/shopping-list/{id}
