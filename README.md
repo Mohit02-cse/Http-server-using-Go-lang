@@ -1,4 +1,5 @@
 Shopping List API with MySQL Integration
+<br>
 This project is a RESTful API developed in Go (Golang) that allows users to manage shopping lists for different customers. The application provides functionality to 
 create, retrieve, and delete shopping items, while persisting data in a MySQL database.
 
