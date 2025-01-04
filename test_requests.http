@@ -1,13 +1,15 @@
 # Create a shopping item for a specific customer
-POST http://localhost:8080/shopping-list/Mohit
+POST http://localhost:8080/shopping-list/Anjali
 Content-Type: application/json
 
 {
-  "name": "Milk"
+  "name": "milk",
+  "quantity": 10
 }
 
+
 # List all shopping items for a specific customer
-GET http://localhost:8080/shopping-list/{customer}
+GET http://localhost:8080/shopping-list/Mohit
 
 # Delete a shopping item for a specific customer by ID
-DELETE http://localhost:8080/shopping-list/{customer}/{id}
+DELETE http://localhost:8080/shopping-list/Mohit/fefded36-f057-4752-be30-f2ae231689db
