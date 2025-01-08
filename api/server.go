@@ -15,6 +15,7 @@ type item struct {
 	ID       uuid.UUID `json:"id"`
 	Name     string    `json:"name"`
 	Quantity int       `json:"quantity"`
+	Price    float64   `json:"price"`
 }
 
 type server struct {
@@ -47,26 +48,33 @@ func NewServer(dsn string) (*server, error) {
 func (s *server) routes() {
 	s.HandleFunc("/shopping-list/{customer}", s.listShoppingItems()).Methods("GET")
 	s.HandleFunc("/shopping-list/{customer}", s.createShoppingItem()).Methods("POST")
-	s.HandleFunc("/shopping-list/{customer}", s.updateItemQuantity()).Methods("PUT")
+	s.HandleFunc("/shopping-list/{customer}", s.patchItemQuantity()).Methods("PATCH")
 	s.HandleFunc("/shopping-list/{customer}", s.removeShoppingItem()).Methods("DELETE")
 }
 
 func (s *server) createShoppingItem() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		customer := mux.Vars(r)["customer"]
-		if customer == "" {
-			http.Error(w, "Customer name is required", http.StatusBadRequest)
+		if customer == "" || !isValidCustomerName(customer) {
+			http.Error(w, "Invalid customer name", http.StatusBadRequest)
 			return
 		}
 
 		var i item
 		if err := json.NewDecoder(r.Body).Decode(&i); err != nil {
-			http.Error(w, "Invalid JSON payload: "+err.Error(), http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		if i.Name == "" {
-			http.Error(w, "Item name is required", http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if i.Quantity <= 0 {
+			i.Quantity = 1
+		}
+		if i.Price < 0 {
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
@@ -75,11 +83,12 @@ func (s *server) createShoppingItem() http.HandlerFunc {
 			CREATE TABLE IF NOT EXISTS %s (
 				id CHAR(36) PRIMARY KEY,
 				name VARCHAR(255) UNIQUE NOT NULL,
-				quantity INT NOT NULL DEFAULT 1
+				quantity INT NOT NULL DEFAULT 1,
+				price FLOAT NOT NULL DEFAULT 0
 			)`, tableName)
 
 		if _, err := s.db.Exec(createTableQuery); err != nil {
-			http.Error(w, "Failed to create table: "+err.Error(), http.StatusInternalServerError)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
@@ -88,15 +97,15 @@ func (s *server) createShoppingItem() http.HandlerFunc {
 
 		if err == nil {
 			updateQuery := fmt.Sprintf("UPDATE %s SET quantity = quantity + ? WHERE name = ?", tableName)
-			if _, err := s.db.Exec(updateQuery, 1, i.Name); err != nil {
-				http.Error(w, "Failed to update item quantity: "+err.Error(), http.StatusInternalServerError)
+			if _, err := s.db.Exec(updateQuery, i.Quantity, i.Name); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 		} else {
 			i.ID = uuid.New()
-			insertQuery := fmt.Sprintf("INSERT INTO %s (id, name, quantity) VALUES (?, ?, ?)", tableName)
-			if _, err := s.db.Exec(insertQuery, i.ID.String(), i.Name, i.Quantity); err != nil {
-				http.Error(w, "Failed to insert item: "+err.Error(), http.StatusInternalServerError)
+			insertQuery := fmt.Sprintf("INSERT INTO %s (id, name, quantity, price) VALUES (?, ?, ?, ?)", tableName)
+			if _, err := s.db.Exec(insertQuery, i.ID.String(), i.Name, i.Quantity, i.Price); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 		}
@@ -106,11 +115,11 @@ func (s *server) createShoppingItem() http.HandlerFunc {
 	}
 }
 
-func (s *server) updateItemQuantity() http.HandlerFunc {
+func (s *server) patchItemQuantity() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		customer := mux.Vars(r)["customer"]
 		if customer == "" {
-			http.Error(w, "Customer name is required", http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
@@ -120,12 +129,12 @@ func (s *server) updateItemQuantity() http.HandlerFunc {
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "Invalid JSON payload: "+err.Error(), http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		if payload.Name == "" || payload.Quantity == 0 {
-			http.Error(w, "Item name and valid quantity are required", http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
@@ -134,13 +143,13 @@ func (s *server) updateItemQuantity() http.HandlerFunc {
 
 		result, err := s.db.Exec(updateQuery, payload.Quantity, payload.Name)
 		if err != nil {
-			http.Error(w, "Failed to update item quantity: "+err.Error(), http.StatusInternalServerError)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		rowsAffected, _ := result.RowsAffected()
 		if rowsAffected == 0 {
-			http.Error(w, "Item not found", http.StatusNotFound)
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
@@ -152,14 +161,14 @@ func (s *server) listShoppingItems() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		customer := mux.Vars(r)["customer"]
 		if customer == "" {
-			http.Error(w, "Customer name is required", http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		query := fmt.Sprintf("SELECT id, name, quantity FROM `%s`", customer)
+		query := fmt.Sprintf("SELECT id, name, quantity, price FROM `%s`", customer)
 		rows, err := s.db.Query(query)
 		if err != nil {
-			http.Error(w, "Failed to fetch items: "+err.Error(), http.StatusInternalServerError)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
@@ -168,8 +177,8 @@ func (s *server) listShoppingItems() http.HandlerFunc {
 		for rows.Next() {
 			var i item
 			var idStr string
-			if err := rows.Scan(&idStr, &i.Name, &i.Quantity); err != nil {
-				http.Error(w, "Failed to parse items: "+err.Error(), http.StatusInternalServerError)
+			if err := rows.Scan(&idStr, &i.Name, &i.Quantity, &i.Price); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			i.ID, _ = uuid.Parse(idStr)
@@ -185,13 +194,13 @@ func (s *server) removeShoppingItem() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		customer := mux.Vars(r)["customer"]
 		if customer == "" {
-			http.Error(w, "Customer name is required", http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		itemName := r.URL.Query().Get("name")
 		if itemName == "" {
-			http.Error(w, "Item name is required", http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
@@ -200,16 +209,25 @@ func (s *server) removeShoppingItem() http.HandlerFunc {
 
 		result, err := s.db.Exec(deleteQuery, itemName)
 		if err != nil {
-			http.Error(w, "Failed to delete item: "+err.Error(), http.StatusInternalServerError)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		rowsAffected, _ := result.RowsAffected()
 		if rowsAffected == 0 {
-			http.Error(w, "Item not found", http.StatusNotFound)
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func isValidCustomerName(name string) bool {
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }
